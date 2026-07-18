@@ -1,0 +1,9 @@
+data/raw/
+data/engineered/
+artifacts/
+.venv/
+__pycache__/
+*.pyc
+.env
+.idea/
+scripts/gis_data/
