@@ -1,0 +1,165 @@
+"""
+Tier 3 — LSTM, direct multi-step forecasting (master §6.5, §7).
+Single forward pass, 10 independent outputs from one fixed representation
+of the input window. PyTorch, per project framework decision.
+"""
+
+import numpy as np
+import torch
+import torch.nn as nn
+from torch.utils.data import TensorDataset, DataLoader
+
+
+class LSTMTier3Net(nn.Module):
+    def __init__(self, n_features: int, hidden_units: int = 64,
+                 dropout: float = 0.2, dense_units: int = 32,
+                 horizon_days: int = 10):
+        super().__init__()
+        self.lstm = nn.LSTM(
+            input_size=n_features,
+            hidden_size=hidden_units,
+            num_layers=1,
+            batch_first=True,
+        )
+        self.dropout = nn.Dropout(dropout)
+        self.dense1 = nn.Linear(hidden_units, dense_units)
+        self.relu = nn.ReLU()
+        self.dense2 = nn.Linear(dense_units, horizon_days)
+
+    def forward(self, x):
+        # x: (batch, window_length, n_features)
+        _, (h_n, _) = self.lstm(x)   # h_n: (1, batch, hidden_units)
+        h = h_n.squeeze(0)            # (batch, hidden_units)
+        h = self.dropout(h)
+        h = self.relu(self.dense1(h))
+        out = self.dense2(h)          # (batch, horizon_days)
+        return out
+
+
+class LSTMForecastModel:
+    """Implements the ForecastModel interface (src/models/interfaces.py)."""
+
+    def __init__(self, n_features: int, hidden_units: int = 64,
+                 dropout: float = 0.2, dense_units: int = 32,
+                 horizon_days: int = 10, lr: float = 1e-3,
+                 batch_size: int = 128, max_epochs: int = 30,
+                 early_stopping_patience: int = 15, device: str = None):
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.net = LSTMTier3Net(n_features, hidden_units, dropout,
+                                 dense_units, horizon_days).to(self.device)
+        self.batch_size = batch_size
+        self.max_epochs = max_epochs
+        self.patience = early_stopping_patience
+        self.lr = lr
+
+        # Scalers — fit only on training data (master §11.5)
+        self.feature_mean = None
+        self.feature_std = None
+        self.target_mean = None
+        self.target_std = None
+
+    def _fit_scalers(self, X_train: np.ndarray, y_train: np.ndarray):
+        self.feature_mean = X_train.mean(axis=(0, 1), keepdims=True)
+        self.feature_std = X_train.std(axis=(0, 1), keepdims=True) + 1e-8
+        self.target_mean = y_train.mean()
+        self.target_std = y_train.std() + 1e-8
+
+    def _scale_X(self, X: np.ndarray) -> np.ndarray:
+        return (X - self.feature_mean) / self.feature_std
+
+    def _scale_y(self, y: np.ndarray) -> np.ndarray:
+        return (y - self.target_mean) / self.target_std
+
+    def _unscale_y(self, y_scaled: np.ndarray) -> np.ndarray:
+        return y_scaled * self.target_std + self.target_mean
+
+    def fit(self, X_train: np.ndarray, y_train: np.ndarray,
+            X_val: np.ndarray = None, y_val: np.ndarray = None) -> None:
+        self._fit_scalers(X_train, y_train)
+
+        X_train_s = self._scale_X(X_train)
+        y_train_s = self._scale_y(y_train)
+
+        train_ds = TensorDataset(
+            torch.tensor(X_train_s, dtype=torch.float32),
+            torch.tensor(y_train_s, dtype=torch.float32),
+        )
+        train_loader = DataLoader(train_ds, batch_size=self.batch_size, shuffle=True)
+
+        use_val = X_val is not None and y_val is not None
+        if use_val:
+            X_val_s = self._scale_X(X_val)
+            y_val_s = self._scale_y(y_val)
+            X_val_t = torch.tensor(X_val_s, dtype=torch.float32).to(self.device)
+            y_val_t = torch.tensor(y_val_s, dtype=torch.float32).to(self.device)
+
+        optimizer = torch.optim.Adam(self.net.parameters(), lr=self.lr)
+        loss_fn = nn.MSELoss()
+
+        best_val_loss = float("inf")
+        epochs_without_improvement = 0
+        best_state = None
+
+        for epoch in range(1, self.max_epochs + 1):
+            self.net.train()
+            epoch_loss = 0.0
+            for xb, yb in train_loader:
+                xb, yb = xb.to(self.device), yb.to(self.device)
+                optimizer.zero_grad()
+                pred = self.net(xb)
+                loss = loss_fn(pred, yb)
+                loss.backward()
+                optimizer.step()
+                epoch_loss += loss.item() * xb.size(0)
+            epoch_loss /= len(train_ds)
+
+            if use_val:
+                self.net.eval()
+                with torch.no_grad():
+                    val_pred = self.net(X_val_t)
+                    val_loss = loss_fn(val_pred, y_val_t).item()
+                print(f"  epoch {epoch}/{self.max_epochs}  "
+                      f"train_loss={epoch_loss:.4f}  val_loss={val_loss:.4f}")
+
+                if val_loss < best_val_loss - 1e-5:
+                    best_val_loss = val_loss
+                    epochs_without_improvement = 0
+                    best_state = {k: v.clone() for k, v in self.net.state_dict().items()}
+                else:
+                    epochs_without_improvement += 1
+                    if epochs_without_improvement >= self.patience:
+                        print(f"  early stopping at epoch {epoch}")
+                        break
+            else:
+                print(f"  epoch {epoch}/{self.max_epochs}  train_loss={epoch_loss:.4f}")
+
+        if use_val and best_state is not None:
+            self.net.load_state_dict(best_state)
+
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        self.net.eval()
+        X_s = self._scale_X(X)
+        X_t = torch.tensor(X_s, dtype=torch.float32).to(self.device)
+        with torch.no_grad():
+            pred_scaled = self.net(X_t).cpu().numpy()
+        return self._unscale_y(pred_scaled)
+
+    def save(self, path: str) -> None:
+        torch.save({
+            "state_dict": self.net.state_dict(),
+            "feature_mean": self.feature_mean,
+            "feature_std": self.feature_std,
+            "target_mean": self.target_mean,
+            "target_std": self.target_std,
+        }, path)
+
+    @classmethod
+    def load(cls, path: str, n_features: int, **kwargs) -> "LSTMForecastModel":
+        checkpoint = torch.load(path)
+        model = cls(n_features=n_features, **kwargs)
+        model.net.load_state_dict(checkpoint["state_dict"])
+        model.feature_mean = checkpoint["feature_mean"]
+        model.feature_std = checkpoint["feature_std"]
+        model.target_mean = checkpoint["target_mean"]
+        model.target_std = checkpoint["target_std"]
+        return model

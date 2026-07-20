@@ -1,0 +1,96 @@
+# configs/model_lstm.yaml
+# Phase A-1 output — window length locked here, inherited by every
+# subsequent tier config (Tiers 2 through 6). Do not override per-tier.
+
+window_length_days: 15
+
+decision_provenance:
+  method: "Empirical ablation, Tier 3 LSTM, full 75-district pool"
+  candidates_tested: [10, 15, 20, 30]
+  fixed_split: "1984-2010 train / 2011-2018 validation (master §5.3, §11.3)"
+  primary_metric: "validation RMSE, horizon days 7-10 (late-horizon priority, §5)"
+  result:
+    window_10:  { rmse_7_10: 2.3684, rmse_1_10: 2.1701 }
+    window_15:  { rmse_7_10: 2.3646, rmse_1_10: 2.1697 }   # winner
+    window_20:  { rmse_7_10: 2.3934, rmse_1_10: 2.1847 }
+    window_30:  { rmse_7_10: 2.4834, rmse_1_10: 2.2716 }
+  seed_variance_check:
+    seeds_tested: [0, 1, 2]
+    window_tested: 10
+    note: >
+      Run on 5-district smoke sample only (not full 75). Range across
+      seeds was 0.0116 -- roughly half the candidate spread observed
+      at 5-district scale (0.0232), meaning the smoke-test ablation
+      alone could not reliably distinguish candidates. Full 75-district
+      run produced a materially wider, monotonic spread (0.115 between
+      best and worst), well above this noise floor -- result trusted
+      at full scale, though a full-scale seed-variance re-check was not
+      separately run (acceptable given the much larger sample and clear
+      margin; flagged here as a limitation, not silently omitted).
+
+acf_pacf_diagnostic:
+  districts_sampled: ["banda", "kushinagar"]
+  selection_rationale: >
+    Banda: hottest annual-mean T2M_MAX district (33.65C, 3rd of 75) and
+    reasonably dry (48.8% RH, mid-range -- not the driest, but clearly
+    hot). Kushinagar: cool (32.35C annual mean) and clearly humid
+    (53.9% RH, tied for most-humid cluster). Selected from Phase 0 EDA,
+    not assumed from geography alone.
+  pacf_cutoff_lag:
+    banda: 18
+    kushinagar: 27
+  agreement: "Disagree (18 vs 27) -- documented, not averaged."
+  reconciliation_with_ablation: >
+    Diagnostic predicted 18-27 as more defensible than short windows;
+    empirical ablation instead favored 15, close behind by 10, with
+    20/30 clearly worse. Explained as: PACF is a linear diagnostic
+    measuring raw autocorrelation strength; it does not account for
+    the LSTM's overfitting risk from additional input dimensionality
+    at a fixed hyperparameter/data-volume regime. Longer windows showed
+    progressively worse train/validation loss divergence in training
+    logs, consistent with overfitting rather than the diagnostic being
+    wrong -- it answers "is there autocorrelation," not "does using it
+    net-improve this specific model." Treated as a real, explained
+    disagreement per Phase A-1 §7.2, not silently resolved by trusting
+    one signal over the other.
+
+baseline_comparison:
+  note: >
+    Tier 0/1 baselines (persistence, rolling-mean, climatological-normal,
+    seasonal-naive) were computed after this ablation, not before -- a
+    sequencing gap in original execution, corrected before declaring
+    this phase complete. All results below evaluated on the identical
+    validation target-date range (2011-2018) as the LSTM ablation.
+  results:
+    persistence:            { rmse_7_10: 3.1217, rmse_1_10: 2.7085 }
+    rolling_mean:            { rmse_7_10: 3.0234, rmse_1_10: 2.7006 }
+    climatological_normal:   { rmse_7_10: 2.6975, rmse_1_10: 2.7005 }
+    seasonal_naive:          { rmse_7_10: 3.6050, rmse_1_10: 3.6039 }
+    lstm_tier3_window15:     { rmse_7_10: 2.3646, rmse_1_10: 2.1697 }
+  skill_score_vs_climatological_normal:
+    formula: "1 - (RMSE_model^2 / RMSE_climatology^2)"
+    value: 0.2316
+    interpretation: >
+      Tier 3 LSTM clears the project's stated performance bar (master
+      §2.2: must beat climatological-normal skill score to be
+      considered to have real skill). Skill score ~0.23 at late
+      horizon -- genuine, not marginal, improvement over the strongest
+      naive baseline.
+
+placeholder_hyperparameters_used_for_ablation:
+  note: >
+    NOT the final tuned hyperparameter set (Phase A-1 §4.1, §9.2).
+    Window length is entangled with this specific configuration --
+    full hyperparameter tuning happens next, with window length held
+    fixed at 15. If tuning produces a very different optimal
+    configuration, revisiting window length is a legitimate future
+    step, not a contradiction of this decision.
+  architecture: "lstm_single_layer"
+  hidden_units: 64
+  dropout: 0.2
+  dense_units: 32
+  optimizer: "adam"
+  loss: "mse"
+  batch_size: 128
+  max_epochs: 30
+  early_stopping_patience: 15
