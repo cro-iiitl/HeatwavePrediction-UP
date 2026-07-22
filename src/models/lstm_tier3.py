@@ -73,25 +73,21 @@ class LSTMForecastModel:
     def _unscale_y(self, y_scaled: np.ndarray) -> np.ndarray:
         return y_scaled * self.target_std + self.target_mean
 
-    def fit(self, X_train: np.ndarray, y_train: np.ndarray,
-            X_val: np.ndarray = None, y_val: np.ndarray = None) -> None:
+    def fit(self, X_train, y_train, X_val=None, y_val=None,
+            train_dates=None, log_fn=None) -> None:
+        # train_dates accepted for interface consistency, unused by LSTM
         self._fit_scalers(X_train, y_train)
-
         X_train_s = self._scale_X(X_train)
         y_train_s = self._scale_y(y_train)
 
-        train_ds = TensorDataset(
-            torch.tensor(X_train_s, dtype=torch.float32),
-            torch.tensor(y_train_s, dtype=torch.float32),
-        )
+        train_ds = TensorDataset(torch.tensor(X_train_s, dtype=torch.float32),
+                                  torch.tensor(y_train_s, dtype=torch.float32))
         train_loader = DataLoader(train_ds, batch_size=self.batch_size, shuffle=True)
 
         use_val = X_val is not None and y_val is not None
         if use_val:
             X_val_s = self._scale_X(X_val)
             y_val_s = self._scale_y(y_val)
-            X_val_t = torch.tensor(X_val_s, dtype=torch.float32).to(self.device)
-            y_val_t = torch.tensor(y_val_s, dtype=torch.float32).to(self.device)
 
         optimizer = torch.optim.Adam(self.net.parameters(), lr=self.lr)
         loss_fn = nn.MSELoss()
@@ -113,13 +109,13 @@ class LSTMForecastModel:
                 epoch_loss += loss.item() * xb.size(0)
             epoch_loss /= len(train_ds)
 
+            val_loss = None
             if use_val:
-                self.net.eval()
-                with torch.no_grad():
-                    val_pred = self.net(X_val_t)
-                    val_loss = loss_fn(val_pred, y_val_t).item()
-                print(f"  epoch {epoch}/{self.max_epochs}  "
-                      f"train_loss={epoch_loss:.4f}  val_loss={val_loss:.4f}")
+                val_pred_s = self._batched_forward(X_val_s)
+                val_loss = float(np.mean((val_pred_s - y_val_s) ** 2))
+
+                if log_fn:
+                    log_fn({"epoch": epoch, "train_loss": epoch_loss, "val_loss": val_loss})
 
                 if val_loss < best_val_loss - 1e-5:
                     best_val_loss = val_loss
@@ -128,20 +124,17 @@ class LSTMForecastModel:
                 else:
                     epochs_without_improvement += 1
                     if epochs_without_improvement >= self.patience:
-                        print(f"  early stopping at epoch {epoch}")
                         break
-            else:
-                print(f"  epoch {epoch}/{self.max_epochs}  train_loss={epoch_loss:.4f}")
+            elif log_fn:
+                log_fn({"epoch": epoch, "train_loss": epoch_loss})
 
         if use_val and best_state is not None:
             self.net.load_state_dict(best_state)
 
-    def predict(self, X: np.ndarray) -> np.ndarray:
-        self.net.eval()
+    def predict(self, X, target_dates=None) -> np.ndarray:
+        # target_dates accepted for interface consistency, unused by LSTM
         X_s = self._scale_X(X)
-        X_t = torch.tensor(X_s, dtype=torch.float32).to(self.device)
-        with torch.no_grad():
-            pred_scaled = self.net(X_t).cpu().numpy()
+        pred_scaled = self._batched_forward(X_s)
         return self._unscale_y(pred_scaled)
 
     def save(self, path: str) -> None:
