@@ -1,100 +1,62 @@
 # configs/model_lstm.yaml
-# Tier 3 LSTM — final locked configuration.
-# window_length_days must stay identical across all model tiers (master §8.6).
-# Other hyperparameters below are Tier 3-specific; Tier 4 requires its own tuning.
+# Tier 3 LSTM — final locked configuration, validated via walk-forward evaluation.
+# See docs/model_comparison_report.md for the full story: the original
+# fixed-split-tuned config appeared to beat GBM, but failed to generalize
+# across walk-forward folds -- this config is the corrected result.
 
 window_length_days: 15
 
 hyperparameters:
   hidden_units: 32
-  learning_rate: 0.0003
-  dropout: 0.2
+  learning_rate: 0.0001
+  dropout: 0.3
   dense_units: 32
   batch_size: 128
   max_epochs: 30
   early_stopping_patience: 15
 
 validation:
-  fixed_split:
-    train: ["1984-01-01", "2010-12-31"]
-    validation: ["2011-01-01", "2018-12-31"]
-
-  window_length_selection:
-    candidates_tested: [10, 15, 20, 30]
-    metric: "validation RMSE, horizon days 7-10"
-    result:
-      window_10: 2.3099   # full-scale, seed-averaged, final hyperparameters
-      window_15: 2.3052   # full-scale, seed-averaged, final hyperparameters
-      window_20: 2.3934   # placeholder-hyperparameter ablation only
-      window_30: 2.4834   # placeholder-hyperparameter ablation only
+  fixed_split_search:
+    method: "2-stage grid search (hidden_units/learning_rate, then dropout/dense_units), single split (1984-2010 train / 2011-2018 val)"
+    winner: { hidden_units: 32, learning_rate: 0.0003, dropout: 0.2, dense_units: 32, rmse_7_10: 2.2954 }
     note: >
-      window=10 and window=15 are statistically indistinguishable
-      (seed range 0.0130 exceeds their 0.0047 mean gap); window=15
-      retained for lower run-to-run variance (std 0.0031 vs 0.0075).
-      window=20/30 are unambiguously worse and were not re-tested at
-      full scale.
+      SUPERSEDED. This config appeared to beat GBM on the single split
+      (2.2954 vs 2.3388) but failed to generalize -- GBM beat it in every
+      walk-forward fold, often by a wide margin. Classic overfitting-to-
+      one-validation-window. Retained here as a documented cautionary
+      finding, not as the current recommended config.
 
-  acf_pacf_diagnostic:
-    districts_sampled: ["banda", "kushinagar"]
-    pacf_cutoff_lag: { banda: 18, kushinagar: 27 }
-    note: >
-      Diagnostic favored longer windows (18-27) than the empirical
-      result (10-15, tied). Explained by PACF being a linear measure of
-      autocorrelation strength, which does not predict whether an LSTM
-      can exploit that lag well enough to outweigh added overfitting
-      risk at this data volume.
-
-  hyperparameter_tuning:
-    method: "2-stage grid search, full 75-district pool, GPU (Kaggle T4), W&B-logged"
-
-    stage_1:
-      swept: ["hidden_units", "learning_rate"]
-      grid:
-        hidden_units: [32, 64, 128]
-        learning_rate: [0.0001, 0.0003, 0.001, 0.003]
-      held_fixed: { dropout: 0.2, dense_units: 32, batch_size: 128,
-                    max_epochs: 30, early_stopping_patience: 15 }
-      winner: { hidden_units: 32, learning_rate: 0.0003, rmse_7_10: 2.3040 }
-      finding: >
-        Learning rate dominates: RMSE increases monotonically with
-        learning rate within every hidden_units group (higher rates
-        overfit faster within the fixed 30-epoch budget). hidden_units
-        effect is weaker: 32 and 64 nearly tied at low learning rates,
-        128 consistently worse -- model has more capacity than this
-        problem needs; extra parameters add overfitting surface, not
-        useful signal.
-
-    stage_2:
-      swept: ["dropout", "dense_units"]
-      grid:
-        dropout: [0.1, 0.2, 0.3, 0.4]
-        dense_units: [16, 32, 64]
-      held_fixed: { hidden_units: 32, learning_rate: 0.0003, batch_size: 128,
-                    max_epochs: 30, early_stopping_patience: 15 }
-      top_result: { dropout: 0.1, dense_units: 64, rmse_7_10: 2.2977 }
-      chosen: { dropout: 0.2, dense_units: 32, rmse_7_10: 2.2991 }
-      finding: >
-        Landscape flat across dropout 0.1-0.3 and dense_units 16-64
-        (top 2 configs differ by 0.0014, within noise). Only dropout=0.4
-        is consistently worse, plausibly over-regularizing an
-        already-small model. Chose dropout=0.2/dense_units=32 over the
-        literal top row: statistically indistinguishable, matches the
-        original placeholder default, avoids unnecessary config churn
-        for no measurable gain -- a judgment call on a flat landscape,
-        not a numerically forced choice.
-
-    full_results:
-      - "scripts/kaggle_output/tuning_stage1_results.csv"
-      - "scripts/kaggle_output/tuning_stage2_results.csv"
-      - "scripts/kaggle_output/seed_variance_full_scale_results.csv"
+  walk_forward_search:
+    method: "5 configurations targeting the capacity/regularization
+      hypothesis, evaluated across all 3 walk-forward folds, selection
+      metric = average RMSE(7-10) across folds"
+    grid_tested:
+      - { hidden_units: 32, dropout: 0.3, learning_rate: 0.0001, dense_units: 32, avg_rmse_7_10: 2.6507 }  # chosen
+      - { hidden_units: 32, dropout: 0.2, learning_rate: 0.0003, dense_units: 32, avg_rmse_7_10: 2.7062 }  # fixed-split winner, re-evaluated
+      - { hidden_units: 16, dropout: 0.2, learning_rate: 0.0003, dense_units: 32, avg_rmse_7_10: 2.7921 }
+      - { hidden_units: 32, dropout: 0.4, learning_rate: 0.0003, dense_units: 32, avg_rmse_7_10: 3.2659 }
+      - { hidden_units: 16, dropout: 0.4, learning_rate: 0.0003, dense_units: 32, avg_rmse_7_10: 3.3925 }
+    finding: >
+      Lower learning rate (0.0001) + moderate dropout (0.3) generalizes
+      meaningfully better than the original config (2.6507 vs 2.7062).
+      However, simply reducing capacity (hidden_units=16) or increasing
+      dropout further (0.4) made generalization WORSE, not better --
+      the original "reduce capacity to fix overfitting" hypothesis was
+      only partially correct. Even the best LSTM config here does not
+      close the gap to GBM.
+    full_results_csv: "scripts/kaggle_output/lstm_walkforward_tuning.csv"
 
 performance:
-  rmse_avg_7_10: 2.2954
-  rmse_avg_1_10: 2.1177
-  skill_score_vs_climatological_normal: 0.2759
-  skill_score_formula: "1 - (RMSE_model^2 / RMSE_climatology^2)"
-  baseline_rmse_7_10:
-    climatological_normal: 2.6975
-    rolling_mean: 3.0234
-    persistence: 3.1217
-    seasonal_naive: 3.6050
+  walk_forward_avg_rmse_7_10: 2.6507
+  fold_breakdown: { fold_1: 2.7303, fold_2: 2.4640, fold_3: 2.7580 }
+
+comparison_to_other_tiers:
+  gbm_tier2_walk_forward_tuned: { avg_rmse_7_10: 2.3976 }
+  note: >
+    LSTM, even after correct walk-forward-aware retuning, is beaten by
+    GBM by a substantial, consistent margin (0.253 RMSE). Full comparison
+    and methodology in docs/model_comparison_report.md.
+
+known_limitations:
+  - "Search was narrow (5 configs), targeted at one hypothesis (capacity/regularization) -- a broader architectural search was not attempted."
+  - "No random seed was fixed in the original walk-forward runs that first revealed the fixed-split overfitting problem -- exact numbers for the superseded config varied slightly run to run, though the qualitative conclusion (GBM wins every fold) was consistent."

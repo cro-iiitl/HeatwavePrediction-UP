@@ -45,6 +45,7 @@ with open("configs/model_gbm.yaml") as f:
 
 with open("configs/model_lstm.yaml") as f:
     lstm_cfg = yaml.safe_load(f)["hyperparameters"]
+    lstm_cfg["lr"] = lstm_cfg.pop("learning_rate")  # config uses learning_rate, class expects lr
 
 all_results = []
 dm_test_results = []

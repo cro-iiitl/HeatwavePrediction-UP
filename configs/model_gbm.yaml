@@ -1,9 +1,5 @@
 # configs/model_gbm.yaml
-# Tier 2 GBM — final locked configuration.
-# window_length_days must match all other tiers (master §8.6).
-# Uses TREE_FEATURE_COLUMNS (flattened window, includes T2M_MAX's own
-# lags/rolling stats) -- distinct from Tier 3's SEQUENCE_FEATURE_COLUMNS,
-# since GBM has no internal memory and needs those features explicitly.
+# Tier 2 GBM — final locked configuration, validated via walk-forward evaluation.
 
 window_length_days: 15
 
@@ -21,44 +17,36 @@ hyperparameters:
   colsample_bytree: 0.8
 
 validation:
-  fixed_split:
-    train: ["1984-01-01", "2010-12-31"]
-    validation: ["2011-01-01", "2018-12-31"]
+  fixed_split_search:
+    method: "Manual grid, 6 configurations, full 75-district pool, single split (1984-2010 train / 2011-2018 val)"
+    winner: { n_estimators: 200, max_depth: 5, learning_rate: 0.05, num_leaves: 31, rmse_7_10: 2.3388 }
+    note: "Superseded as the primary evidence by the walk-forward search below; retained here for history."
 
-  hyperparameter_search:
-    method: "Manual grid, 6 configurations, full 75-district pool, CPU"
+  walk_forward_search:
+    method: "5 configurations, full 75-district pool, evaluated across all 3 walk-forward folds, selection metric = average RMSE(7-10) across folds"
     grid_tested:
-      - { n_estimators: 100, max_depth: 5,  learning_rate: 0.05, num_leaves: 31,  rmse_7_10: 2.3435 }
-      - { n_estimators: 200, max_depth: 5,  learning_rate: 0.05, num_leaves: 31,  rmse_7_10: 2.3388 }  # winner
-      - { n_estimators: 200, max_depth: 7,  learning_rate: 0.05, num_leaves: 63,  rmse_7_10: 2.3517 }
-      - { n_estimators: 200, max_depth: -1, learning_rate: 0.03, num_leaves: 31,  rmse_7_10: 2.3417 }
-      - { n_estimators: 300, max_depth: 7,  learning_rate: 0.03, num_leaves: 63,  rmse_7_10: 2.3488 }
-      - { n_estimators: 300, max_depth: -1, learning_rate: 0.05, num_leaves: 127, rmse_7_10: 2.3702 }
+      - { n_estimators: 300, max_depth: 5, learning_rate: 0.03, num_leaves: 31, avg_rmse_7_10: 2.3948 }
+      - { n_estimators: 200, max_depth: 5, learning_rate: 0.05, num_leaves: 31, avg_rmse_7_10: 2.3976 }  # chosen
+      - { n_estimators: 200, max_depth: 6, learning_rate: 0.05, num_leaves: 63, avg_rmse_7_10: 2.4047 }
+      - { n_estimators: 150, max_depth: 3, learning_rate: 0.05, num_leaves: 15, avg_rmse_7_10: 2.4100 }
+      - { n_estimators: 100, max_depth: 4, learning_rate: 0.05, num_leaves: 15, avg_rmse_7_10: 2.4101 }
     note: >
-      All 6 configs land within a tight band (2.339-2.370) -- search was
-      not exhaustive (narrow depth/leaf range), but the flatness of
-      results across configs suggests a wider search would likely narrow
-      the margin to Tier 3, not change the tier ranking. Not pursued
-      further given the gap to Tier 3 (see performance section) is
-      already well outside this band's spread.
-
-  full_results_csv: "scripts/gbm_output/tuning_results.csv"
+      Best (n_estimators=300) beats the retained config by only 0.0028 --
+      within noise. Retained the original fixed-split winner rather than
+      switching, since it's cheaper (fewer estimators) and already
+      save/load verified. GBM's fixed-split and walk-forward winners are
+      nearly identical, confirming GBM's tuning was not overfit to the
+      single split the way LSTM's was (see model_lstm.yaml).
+    full_results_csv: "scripts/kaggle_output/gbm_walkforward_tuning.csv"
 
 performance:
-  rmse_avg_7_10: 2.3388
-  rmse_avg_1_10: 2.1456
+  walk_forward_avg_rmse_7_10: 2.3976
+  fold_breakdown: { fold_1: 2.4030, fold_2: 2.3419, fold_3: 2.4480 }
 
 comparison_to_other_tiers:
-  lstm_tier3_final_tuned:        { rmse_7_10: 2.2954 }
-  lstm_tier3_placeholder_hparams: { rmse_7_10: 2.3646 }
-  climatological_normal:          { rmse_7_10: 2.6975 }
+  lstm_tier3_walk_forward_tuned: { avg_rmse_7_10: 2.6507 }
   note: >
-    Tier 2 GBM (2.3388) is clearly worse than the final tuned Tier 3 LSTM
-    (2.2954) by a margin (0.043) well outside this project's observed
-    noise floor (typically 0.005-0.015 at full 75-district scale, per
-    Tier 3's seed-variance check). Notably, Tier 2 also does not beat
-    even the pre-tuning placeholder LSTM (2.3646) -- an untuned LSTM was
-    already competitive with GBM's fully searched result. Suggests the
-    LSTM's sequential representation captures genuine additional signal
-    beyond what a flattened, lag-feature-based GBM can access from the
-    same window.
+    GBM beats the walk-forward-tuned LSTM by a substantial, consistent
+    margin (0.253 RMSE) across all 3 folds -- GBM is the current best
+    individual model tier for this project. Full comparison and
+    methodology in docs/model_comparison_report.md.

@@ -103,7 +103,7 @@ class ClimatologicalNormalModel:
         records = []
         for date_arr, y_arr in zip(train_dates, y_train):
             for date_str, val in zip(date_arr, y_arr):
-                dt = pd.Timestamp(date_str)
+                dt = pd.Timestamp(str(date_str))
                 records.append({"month": dt.month, "day": dt.day, "value": val})
 
         df = pd.DataFrame(records)
@@ -120,7 +120,7 @@ class ClimatologicalNormalModel:
         preds = np.zeros((len(target_dates), self.horizon_days))
         for i, date_arr in enumerate(target_dates):
             for h, date_str in enumerate(date_arr):
-                dt = pd.Timestamp(date_str)
+                dt = pd.Timestamp(str(date_str))
                 preds[i, h] = self.normal_table.get((dt.month, dt.day), np.nan)
         return preds
 
@@ -166,7 +166,7 @@ class SeasonalNaiveModel:
         preds = np.full((len(target_dates), self.horizon_days), np.nan)
         for i, date_arr in enumerate(target_dates):
             for h, date_str in enumerate(date_arr):
-                lookup_date = pd.Timestamp(date_str) - pd.DateOffset(years=1)
+                lookup_date = pd.Timestamp(str(date_str)) - pd.DateOffset(years=1)
                 lookup_str = lookup_date.strftime("%Y-%m-%d")
                 if lookup_str in self.history_table:
                     preds[i, h] = self.history_table[lookup_str]

@@ -1,8 +1,4 @@
-"""
-Tier 3 — LSTM, direct multi-step forecasting (master §6.5, §7).
-Single forward pass, 10 independent outputs from one fixed representation
-of the input window. PyTorch, per project framework decision.
-"""
+"""Tier 3 — LSTM, direct multi-step (master §6.5)."""
 
 import numpy as np
 import torch
@@ -11,67 +7,67 @@ from torch.utils.data import TensorDataset, DataLoader
 
 
 class LSTMTier3Net(nn.Module):
-    def __init__(self, n_features: int, hidden_units: int = 64,
-                 dropout: float = 0.2, dense_units: int = 32,
-                 horizon_days: int = 10):
+    def __init__(self, n_features, hidden_units=64, dropout=0.2,
+                 dense_units=32, horizon_days=10):
         super().__init__()
-        self.lstm = nn.LSTM(
-            input_size=n_features,
-            hidden_size=hidden_units,
-            num_layers=1,
-            batch_first=True,
-        )
+        self.lstm = nn.LSTM(input_size=n_features, hidden_size=hidden_units,
+                             num_layers=1, batch_first=True)
         self.dropout = nn.Dropout(dropout)
         self.dense1 = nn.Linear(hidden_units, dense_units)
         self.relu = nn.ReLU()
         self.dense2 = nn.Linear(dense_units, horizon_days)
 
     def forward(self, x):
-        # x: (batch, window_length, n_features)
-        _, (h_n, _) = self.lstm(x)   # h_n: (1, batch, hidden_units)
-        h = h_n.squeeze(0)            # (batch, hidden_units)
+        _, (h_n, _) = self.lstm(x)
+        h = h_n.squeeze(0)
         h = self.dropout(h)
         h = self.relu(self.dense1(h))
-        out = self.dense2(h)          # (batch, horizon_days)
-        return out
+        return self.dense2(h)
 
 
 class LSTMForecastModel:
-    """Implements the ForecastModel interface (src/models/interfaces.py)."""
-
-    def __init__(self, n_features: int, hidden_units: int = 64,
-                 dropout: float = 0.2, dense_units: int = 32,
-                 horizon_days: int = 10, lr: float = 1e-3,
-                 batch_size: int = 128, max_epochs: int = 30,
-                 early_stopping_patience: int = 15, device: str = None):
+    def __init__(self, n_features, hidden_units=64, dropout=0.2, dense_units=32,
+                 horizon_days=10, lr=1e-3, batch_size=128, max_epochs=30,
+                 early_stopping_patience=15, eval_batch_size=1024, device=None):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.net = LSTMTier3Net(n_features, hidden_units, dropout,
                                  dense_units, horizon_days).to(self.device)
         self.batch_size = batch_size
+        self.eval_batch_size = eval_batch_size
         self.max_epochs = max_epochs
         self.patience = early_stopping_patience
         self.lr = lr
-
-        # Scalers — fit only on training data (master §11.5)
         self.feature_mean = None
         self.feature_std = None
         self.target_mean = None
         self.target_std = None
 
-    def _fit_scalers(self, X_train: np.ndarray, y_train: np.ndarray):
+    def _fit_scalers(self, X_train, y_train):
         self.feature_mean = X_train.mean(axis=(0, 1), keepdims=True)
         self.feature_std = X_train.std(axis=(0, 1), keepdims=True) + 1e-8
         self.target_mean = y_train.mean()
         self.target_std = y_train.std() + 1e-8
 
-    def _scale_X(self, X: np.ndarray) -> np.ndarray:
+    def _scale_X(self, X):
         return (X - self.feature_mean) / self.feature_std
 
-    def _scale_y(self, y: np.ndarray) -> np.ndarray:
+    def _scale_y(self, y):
         return (y - self.target_mean) / self.target_std
 
-    def _unscale_y(self, y_scaled: np.ndarray) -> np.ndarray:
+    def _unscale_y(self, y_scaled):
         return y_scaled * self.target_std + self.target_mean
+
+    def _batched_forward(self, X_scaled: np.ndarray) -> np.ndarray:
+        self.net.eval()
+        outputs = []
+        n = len(X_scaled)
+        with torch.no_grad():
+            for start in range(0, n, self.eval_batch_size):
+                end = min(start + self.eval_batch_size, n)
+                xb = torch.tensor(X_scaled[start:end], dtype=torch.float32).to(self.device)
+                out = self.net(xb).cpu().numpy()
+                outputs.append(out)
+        return np.concatenate(outputs, axis=0)
 
     def fit(self, X_train, y_train, X_val=None, y_val=None,
             train_dates=None, log_fn=None) -> None:
