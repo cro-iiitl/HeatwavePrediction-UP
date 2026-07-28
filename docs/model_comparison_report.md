@@ -275,7 +275,29 @@ from raw sequences. Plausible contributing factors:
   or better than longer ones.
 
 ---
+### GBM seed-stability confirmation
 
+A gap flagged during Tier 2's initial evaluation — no check had been
+done on whether GBM's reported RMSE was stable across different random
+seeds, unlike the equivalent check already performed for LSTM's
+window-length decision — was closed by training the locked GBM
+configuration 3 times (seeds 42, 43, 44) across all 3 walk-forward
+folds:
+
+| Seed | Fold 1 | Fold 2 | Fold 3 | Average |
+|---|---|---|---|---|
+| 42 | 2.4030 | 2.3419 | 2.4480 | 2.3976 |
+| 43 | 2.4003 | 2.3433 | 2.4469 | 2.3968 |
+| 44 | 2.4031 | 2.3430 | 2.4468 | 2.3977 |
+
+Range across seeds: **0.0008** — roughly 0.3% of the ~0.24 RMSE gap
+between GBM and LSTM. Unlike LSTM's window-length "win," which turned
+out to be smaller than its own seed noise and had to be walked back to
+a near-tie, GBM's result shows no such fragility. This closes the last
+open question about the GBM-vs-LSTM comparison: the conclusion is not
+an artifact of GBM's own training randomness.
+
+---
 ## 6. Honest Limitations of This Comparison
 
 - GBM's walk-forward search covered 5 configurations across a fairly

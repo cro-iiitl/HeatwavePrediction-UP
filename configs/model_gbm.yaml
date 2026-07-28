@@ -39,14 +39,37 @@ validation:
       single split the way LSTM's was (see model_lstm.yaml).
     full_results_csv: "scripts/kaggle_output/gbm_walkforward_tuning.csv"
 
+  seed_variance_check:
+    seeds_tested: [42, 43, 44]
+    scale: "Full 75-district pool, all 3 walk-forward folds, locked config (n_estimators=200, max_depth=5, lr=0.05, num_leaves=31)"
+    result:
+      seed_42: 2.3976
+      seed_43: 2.3968
+      seed_44: 2.3977
+      mean: 2.3974
+      std: 0.0004
+      range: 0.0008
+    note: >
+      GBM's reported performance is extremely stable across random
+      seeds -- range (0.0008) is only ~0.3% of the ~0.24 RMSE gap to
+      LSTM (walk-forward). Unlike LSTM's window-length decision, which
+      required exactly this kind of check to catch a near-tie (see
+      model_lstm.yaml), GBM's seed variance is unambiguously negligible.
+      The "GBM beats LSTM" conclusion carries no meaningful risk from
+      GBM's own training randomness.
+    full_results_csv: "scripts/gbm_output/seed_variance_results.csv"
+
 performance:
   walk_forward_avg_rmse_7_10: 2.3976
   fold_breakdown: { fold_1: 2.4030, fold_2: 2.3419, fold_3: 2.4480 }
 
 comparison_to_other_tiers:
-  lstm_tier3_walk_forward_tuned: { avg_rmse_7_10: 2.6507 }
+  lstm_tier3_walk_forward_tuned: { avg_rmse_7_10: 2.6385 }
   note: >
     GBM beats the walk-forward-tuned LSTM by a substantial, consistent
-    margin (0.253 RMSE) across all 3 folds -- GBM is the current best
+    margin (~0.24 RMSE) across all 3 folds -- confirmed both by
+    Diebold-Mariano significance testing (10/10 horizon days
+    significant, every fold) and by a seed-variance check confirming
+    GBM's own result is highly stable. GBM is the current best
     individual model tier for this project. Full comparison and
     methodology in docs/model_comparison_report.md.
