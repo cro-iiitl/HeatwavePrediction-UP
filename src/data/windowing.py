@@ -50,6 +50,7 @@ TREE_FEATURE_COLUMNS = [
     "SOIL_DRYNESS_lag1", "ATM_DRYNESS_lag1", "RADIATION_EFFECTIVE_lag1",
     "CLOUD_AMT_lag1", "WS10M_lag1", "PRECTOTCORR_lag1", "PS_lag1",
     "DOY_SIN", "DOY_COS", "WD10M_SIN", "WD10M_COS",
+    "lat", "lon",
 ]
 
 # Sequence-native feature set — LSTM/GRU (Tier 3+). Drops T2M_MAX's own

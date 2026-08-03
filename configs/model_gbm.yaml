@@ -34,14 +34,13 @@ validation:
       Best (n_estimators=300) beats the retained config by only 0.0028 --
       within noise. Retained the original fixed-split winner rather than
       switching, since it's cheaper (fewer estimators) and already
-      save/load verified. GBM's fixed-split and walk-forward winners are
-      nearly identical, confirming GBM's tuning was not overfit to the
-      single split the way LSTM's was (see model_lstm.yaml).
+      save/load verified. This search predates the lat/lon feature
+      addition below -- all values here are on the 17-feature set.
     full_results_csv: "scripts/kaggle_output/gbm_walkforward_tuning.csv"
 
   seed_variance_check:
     seeds_tested: [42, 43, 44]
-    scale: "Full 75-district pool, all 3 walk-forward folds, locked config (n_estimators=200, max_depth=5, lr=0.05, num_leaves=31)"
+    scale: "Full 75-district pool, all 3 walk-forward folds, locked config (n_estimators=200, max_depth=5, lr=0.05, num_leaves=31), 17-feature set (predates lat/lon)"
     result:
       seed_42: 2.3976
       seed_43: 2.3968
@@ -52,24 +51,46 @@ validation:
     note: >
       GBM's reported performance is extremely stable across random
       seeds -- range (0.0008) is only ~0.3% of the ~0.24 RMSE gap to
-      LSTM (walk-forward). Unlike LSTM's window-length decision, which
-      required exactly this kind of check to catch a near-tie (see
-      model_lstm.yaml), GBM's seed variance is unambiguously negligible.
-      The "GBM beats LSTM" conclusion carries no meaningful risk from
-      GBM's own training randomness.
+      LSTM (walk-forward). GBM's seed variance is unambiguously
+      negligible.
     full_results_csv: "scripts/gbm_output/seed_variance_results.csv"
 
+  location_feature_test:
+    method: "Added lat/lon as flattened features, compared with/without across all 3 walk-forward folds"
+    result:
+      without_lat_lon: 2.3976
+      with_lat_lon: 2.3904
+      improvement: 0.0073
+    note: >
+      Small but consistent improvement across all 3 folds (2.4030->2.4017,
+      2.3419->2.3317, 2.4480->2.4377), and ~9x larger than GBM's own
+      seed-noise floor (0.0008) -- treated as a real, if modest, effect.
+      lat/lon added permanently to TREE_FEATURE_COLUMNS as of this test.
+      Hyperparameters above were tuned/verified on the prior 17-feature
+      set and not re-searched after this addition -- effect size is
+      small enough that this is not expected to change the ranking.
+    full_results_csv: "scripts/gbm_output/lat_lon_feature_test.csv"
+
 performance:
-  walk_forward_avg_rmse_7_10: 2.3976
-  fold_breakdown: { fold_1: 2.4030, fold_2: 2.3419, fold_3: 2.4480 }
+  walk_forward_avg_rmse_7_10: 2.3904
+  fold_breakdown: { fold_1: 2.4017, fold_2: 2.3317, fold_3: 2.4377 }
+  feature_set: "19 features -- TREE_FEATURE_COLUMNS including lat/lon"
+  note: >
+    Current primary result, with lat/lon included (see
+    location_feature_test above). Prior result without lat/lon was
+    2.3976 -- see walk_forward_search and seed_variance_check sections,
+    both of which predate this feature addition.
 
 comparison_to_other_tiers:
-  lstm_tier3_walk_forward_tuned: { avg_rmse_7_10: 2.6385 }
+  lstm_tier3_walk_forward: { avg_rmse_range: "2.5451 - 2.7211", note: "see model_lstm.yaml for full detail" }
   note: >
-    GBM beats the walk-forward-tuned LSTM by a substantial, consistent
-    margin (~0.24 RMSE) across all 3 folds -- confirmed both by
-    Diebold-Mariano significance testing (10/10 horizon days
-    significant, every fold) and by a seed-variance check confirming
-    GBM's own result is highly stable. GBM is the current best
-    individual model tier for this project. Full comparison and
-    methodology in docs/model_comparison_report.md.
+    GBM (with lat/lon, 2.3904) beats every observed LSTM walk-forward
+    result (range 2.5451-2.7211 across multiple runs with different
+    random seeds -- LSTM's own seed-variance was not separately
+    quantified, see model_lstm.yaml known_limitations) by a substantial,
+    consistent margin -- GBM's best case (2.3904) still beats LSTM's
+    best observed case (2.5451) by 0.1547. Confirmed by Diebold-Mariano
+    significance testing (10/10 horizon days significant, every fold,
+    on the pre-lat/lon numbers). GBM is the current best individual
+    model tier for this project. Full comparison and methodology in
+    docs/model_comparison_report.md.
